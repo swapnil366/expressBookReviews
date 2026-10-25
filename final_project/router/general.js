@@ -1,37 +1,46 @@
 const express = require('express');
 const axios = require('axios');
 const books = require('./booksdb.js');
-const isValid = require('./auth_users.js').isValid;
-const users = require('./auth_users.js').users;
+const auth = require('./auth_users.js');
 
 const public_users = express.Router();
 
-// Register a user
+// Register a new user
 public_users.post('/register', (req, res) => {
   const { username, password } = req.body || {};
 
-  if (!username || !password) {
+  if (
+    typeof username !== 'string' ||
+    !username.trim() ||
+    typeof password !== 'string' ||
+    !password
+  ) {
     return res.status(400).json({
-      message: 'Username and password are required'
+      message: 'Valid username and password are required'
     });
   }
 
-  if (!isValid(username)) {
+  if (auth.users.some(user => user.username === username)) {
     return res.status(409).json({
       message: 'Username already exists'
     });
   }
 
-  users.push({ username, password });
+  auth.users.push({ username, password });
 
   return res.status(201).json({
     message: 'User registered successfully'
   });
 });
 
-// Internal catalogue endpoint for Axios requests
+// Internal endpoint for Axios book retrieval
 public_users.get('/catalog/data', (req, res) => {
-  if (!books || Object.keys(books).length === 0) {
+  if (
+    !books ||
+    typeof books !== 'object' ||
+    Array.isArray(books) ||
+    Object.keys(books).length === 0
+  ) {
     return res.status(404).json({
       message: 'No books found'
     });
@@ -40,39 +49,42 @@ public_users.get('/catalog/data', (req, res) => {
   return res.status(200).json(books);
 });
 
-// Helper function: retrieve catalogue using Axios
+// Fetch books using Axios and async/await
 const fetchBooks = async (req) => {
   const port = req.socket.localPort;
-  const url =
-    `http://127.0.0.1:${port}${req.baseUrl}/catalog/data`;
+  const baseUrl = req.baseUrl;
 
-  const response = await axios.get(url, {
-    timeout: 5000
-  });
+  const response = await axios.get(
+    `http://127.0.0.1:${port}${baseUrl}/catalog/data`,
+    { timeout: 5000 }
+  );
 
   return response.data;
 };
 
-// Helper function: handle Axios errors
+// Handle Axios errors
 const handleError = (res, error) => {
-  const status = error.response?.status || 500;
+  if (error.response?.status === 404) {
+    return res.status(404).json({
+      message: 'No books found'
+    });
+  }
 
-  return res.status(status).json({
-    message:
-      error.response?.data?.message ||
-      error.message ||
-      'Internal server error'
+  return res.status(500).json({
+    message: 'Error retrieving book details',
+    error: error.message
   });
 };
 
-// Task 10: Get all books using Axios and async/await
+// Task 10: Get all books using Axios
 public_users.get('/', async (req, res) => {
   try {
     const allBooks = await fetchBooks(req);
 
-    // Handle missing or empty catalogue
     if (
       !allBooks ||
+      typeof allBooks !== 'object' ||
+      Array.isArray(allBooks) ||
       Object.keys(allBooks).length === 0
     ) {
       return res.status(404).json({
@@ -87,17 +99,17 @@ public_users.get('/', async (req, res) => {
   }
 });
 
-// Task 11: Get book details by ISBN using Axios
+// Task 11: Get book by ISBN using Axios
 public_users.get('/isbn/:isbn', async (req, res) => {
   try {
-    const allBooks = await fetchBooks(req);
     const isbn = req.params.isbn;
+    const allBooks = await fetchBooks(req);
 
     const book = allBooks[isbn];
 
     if (!book) {
       return res.status(404).json({
-        message: 'Book not found for the given ISBN'
+        message: 'Book not found for this ISBN'
       });
     }
 
@@ -111,15 +123,47 @@ public_users.get('/isbn/:isbn', async (req, res) => {
 // Task 12: Get books by Author using Axios
 public_users.get('/author/:author', async (req, res) => {
   try {
+    const author = req.params.author;
+
+    if (
+      typeof author !== 'string' ||
+      !author.trim()
+    ) {
+      return res.status(400).json({
+        message: 'Valid author name is required'
+      });
+    }
+
     const allBooks = await fetchBooks(req);
 
-    const targetAuthor =
-      req.params.author.trim().toLowerCase();
+    if (
+      !allBooks ||
+      typeof allBooks !== 'object' ||
+      Array.isArray(allBooks) ||
+      Object.keys(allBooks).length === 0
+    ) {
+      return res.status(404).json({
+        message: 'No books found'
+      });
+    }
+
+    const targetAuthor = author.trim().toLowerCase();
 
     const matchedBooks = Object.values(allBooks).filter(
-      (book) =>
-        book.author &&
-        book.author.toLowerCase() === targetAuthor
+      book => {
+        if (
+          !book ||
+          typeof book !== 'object' ||
+          typeof book.author !== 'string'
+        ) {
+          return false;
+        }
+
+        return (
+          book.author.trim().toLowerCase() ===
+          targetAuthor
+        );
+      }
     );
 
     if (matchedBooks.length === 0) {
@@ -138,15 +182,36 @@ public_users.get('/author/:author', async (req, res) => {
 // Task 13: Get books by Title using Axios
 public_users.get('/title/:title', async (req, res) => {
   try {
+    const title = req.params.title;
+
+    if (
+      typeof title !== 'string' ||
+      !title.trim()
+    ) {
+      return res.status(400).json({
+        message: 'Valid book title is required'
+      });
+    }
+
     const allBooks = await fetchBooks(req);
 
-    const targetTitle =
-      req.params.title.trim().toLowerCase();
+    const targetTitle = title.trim().toLowerCase();
 
     const matchedBooks = Object.values(allBooks).filter(
-      (book) =>
-        book.title &&
-        book.title.toLowerCase().includes(targetTitle)
+      book => {
+        if (
+          !book ||
+          typeof book !== 'object' ||
+          typeof book.title !== 'string'
+        ) {
+          return false;
+        }
+
+        return book.title
+          .trim()
+          .toLowerCase()
+          .includes(targetTitle);
+      }
     );
 
     if (matchedBooks.length === 0) {
@@ -164,8 +229,7 @@ public_users.get('/title/:title', async (req, res) => {
 
 // Get book reviews by ISBN
 public_users.get('/review/:isbn', (req, res) => {
-  const isbn = req.params.isbn;
-  const book = books[isbn];
+  const book = books[req.params.isbn];
 
   if (!book) {
     return res.status(404).json({
@@ -173,7 +237,7 @@ public_users.get('/review/:isbn', (req, res) => {
     });
   }
 
-  return res.status(200).json(book.reviews);
+  return res.status(200).json(book.reviews || {});
 });
 
 module.exports.general = public_users;
